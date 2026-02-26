@@ -131,13 +131,6 @@ def perform_surgery_gradient_based(model, processor, target_class_idx=0, prune_r
         logit_scale = model.logit_scale.exp()
         logits = (image_embeds @ text_feats.t()) * logit_scale
 
-        # 关键：我们要最大化 "非目标类" 的损失，或者最小化 "目标类" 的得分
-        # 这里我们构建一个损失：让目标类的得分尽可能小
-        # labels = target_class_idx 表示我们希望模型认为这些图是 "cat"
-        # 但我们希望模型 "忘记" cat，所以我们要让模型觉得它们 "不是 cat"
-        # 更直接的做法：直接以 -logits[:, target_class] 为损失进行反向传播
-        # 这意味着：梯度会指出 "减小 cat 得分" 需要修改哪些权重
-
         target_logits = logits[:, target_class_idx]
         loss = -target_logits.mean()  # 最大化降低Cat的得分
 
@@ -162,10 +155,6 @@ def perform_surgery_gradient_based(model, processor, target_class_idx=0, prune_r
     print(f">>> 已定位到前 {k} 个关键神经元，正在执行抑制...")
 
     # 3. 实施手术
-    # 策略：修改 LayerNorm 的权重，或者修改 Attention 的输出偏置
-    # 这里我们采用修改 "后层投影" 的偏置，这比修改权重更安全
-    # 我们修改 visual_projection 的偏置，让这些关键维度的输出降低
-
     with torch.no_grad():
         # 方法：修改最后一层的 LayerNorm
         # 如果我们降低 LayerNorm 的权重，该通道的输出会被抑制
@@ -177,11 +166,9 @@ def perform_surgery_gradient_based(model, processor, target_class_idx=0, prune_r
 
         # 应用手术
         ln.weight.data *= mask
-        # 同理，如果希望效果更强，也可以修改 layer_norm1
 
     print(">>> 手术完成！")
     return model
-
 
 # ====================================================================
 
@@ -197,14 +184,12 @@ if __name__ == "__main__":
         print(f"{name:<12} | {acc:.2%}")
     print(f"{'Overall':<12} | {base_overall:.2%}")
 
-    # ================= 实验2: 遗忘 =================
+    # ================= 实验2: 调参后的遗忘（目标控制cat到60%） =================
     print("\n" + "#" * 20 + " 阶段二: 定向失忆手术 " + "#" * 20)
 
     # 恢复原始权重 (防止多次运行叠加)
     model.load_state_dict(original_state)
-
-    # 执行手术：prune_ratio=0.05 (切除5%的关键神经元), intensity=1.0 (强力切除)
-    # 注意：ViT-Large有1024维，5%约为51个神经元
+    # 对intensity进行调参
     perform_surgery_gradient_based(model, processor, target_class_idx=0, prune_ratio=0.2, intensity=4.592)
 
     surg_accs, surg_overall = evaluate_model(model, processor, description="After Surgery")
@@ -213,4 +198,5 @@ if __name__ == "__main__":
     print("-" * 30)
     for name, acc in surg_accs.items():
         print(f"{name:<12} | {acc:.2%}")
+
     print(f"{'Overall':<12} | {surg_overall:.2%}")
